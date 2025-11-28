@@ -1,46 +1,40 @@
+// app/api/upload-record/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getSigner, getIndexer } from '@/lib/0g-storage';
-import { ZgFile } from '@0glabs/0g-ts-sdk';
-import formidable from 'formidable';  // npm install formidable for multipart parsing
-import fs from 'fs';
+import { writeFile } from 'fs/promises';
+import { mkdir } from 'fs/promises';
+import path from 'path';
 
 export async function POST(request: NextRequest) {
   try {
-    const form = formidable({});
-    const [fields, files] = await form.parse(request as any);  // Parse multipart
+    const formData = await request.formData();
+    const file = formData.get('file') as File | null;
 
-    const file = files.file?.[0];  // Assume 'file' field in form
-    if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    if (!file) {
+      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    }
 
-    // Read file path (temporary)
-    const filePath = file.filepath;
-    const zgFile = await ZgFile.fromFilePath(filePath);
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    
+    const filename = `${Date.now()}-${file.name}`;
+    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+    const filepath = path.join(uploadDir, filename);
 
-    // Generate Merkle tree for verification
-    const [tree, treeErr] = await zgFile.merkleTree();
-    if (treeErr) throw new Error(`Merkle tree error: ${treeErr}`);
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(filepath, buffer);
 
-    const rootHash = tree?.rootHash();
-    console.log('File Root Hash:', rootHash);
-
-    // Upload to 0G Storage
-    const signer = await getSigner();
-    const indexer = getIndexer();
-    const [tx, uploadErr] = await indexer.upload(zgFile, RPC_URL, signer);
-    if (uploadErr) throw new Error(`Upload error: ${uploadErr}`);
-
-    // Cleanup
-    await zgFile.close();
-    fs.unlinkSync(filePath);  // Remove temp file
-
-    return NextResponse.json({ 
-      success: true, 
-      rootHash, 
-      transactionHash: tx,
-      message: 'Record uploaded to 0G Storage' 
+    return NextResponse.json({
+      message: 'File uploaded successfully',
+      filename,
+      filepath: `/uploads/${filename}`
     });
-  } catch (error) {
-    console.error('Upload failed:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    console.error('Upload error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+    
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: 500 }
+    );
   }
 }
